@@ -1,0 +1,26 @@
+# Easy CN Prompt 依赖
+#
+# 说明：核心功能（节点、词块编辑、词库搜索）**不需要额外依赖**，
+#       ComfyUI 自带的 aiohttp / anyio 就够了。
+#       下面这些只有用到对应功能时才需要。
+
+# ── 基础（ComfyUI 已自带，此处仅作文档） ──
+# aiohttp
+# anyio
+
+# ── 词库搜索（可选，装了更快） ──
+# 不用 FTS5 也能跑，词库是 SQLite 直接 LIKE 查询
+# （FTS5 是 SQLite 内置模块，无需 pip 安装）
+
+# ── 本地翻译（可选） ──
+# 需要 llama-cpp-python 才能用「翻译未收录」
+# ⚠️ 若你的 ComfyUI 用的是 ROCm/CUDA 定制版 torch，
+#    装 llama-cpp-python 时不要让它重装 torch
+# llama-cpp-python>=0.3.0
+
+# ── 自动分类（可选） ──
+# setfit / sentence-transformers **不在这里装** ——
+# 它们会拖入 pandas / pyarrow / datasets 等，并可能降级 fsspec
+# （fsspec 被 huggingface_hub 和 torch 依赖，降级有风险）。
+#
+# 正确做法：装到插件的独立目录，见 install_classify.sh

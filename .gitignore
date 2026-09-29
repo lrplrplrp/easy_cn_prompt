@@ -1,0 +1,41 @@
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+
+# ── 个人数据（插件首次运行会自动创建）──
+easy_cn_prompt/data/custom_dict.db
+easy_cn_prompt/data/custom_dict.db.bak*
+
+# ── 词库备份（体积大，属调试产物）──
+easy_cn_prompt/data/tag.sqlite.bak*
+easy_cn_prompt/data/*.bak*
+*.bak
+*.bak.*
+
+# ── 分类功能的 pip 依赖（用 install_classify.sh 自行安装）──
+easy_cn_prompt/data/cls_pkgs/
+
+# ── 分类中间产物 ──
+data/auto_classify_result.json
+data/todo_top3000.json
+data/reclass_cat0.json
+
+# ── 开发期实验脚本 ──
+tools/bench*.py
+tools/cmp.py
+tools/knn*.py
+tools/setfit_cls.py
+tools/apply_auto_classification.py
+tools/apply_reclass_cat0.py
+tools/reclass_cat0.py
+
+# ── 开发文档（不入公开仓库）──
+开发文档.md
+Laya分类测试报告.md
+
+# ── 独立 clone 的词库仓库（有自己的 .git）──
+ffdkj-Danbooru_Tag-Chinese-English-Translation-Table/
+
+# ── 翻译模型（约 1.1GB，需用户自行下载）──
+*.gguf
