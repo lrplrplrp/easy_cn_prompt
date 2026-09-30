@@ -82,8 +82,11 @@ def resolve_model(name: str) -> str | None:
 # 早期 en2zh 用的是英文模板（"Translate ... into Chinese"），
 # 在 CUDA 后端上实测会输出"抱歉/说明"类的无关英文长串 —— 且目标语言
 # 写成英文单词 "Chinese" 也不符合模型训练时的表述习惯。
-ZH_TMPL = "将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
-EN_TMPL = "将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
+# 注：模板里的换行从 "\n\n" 改成 "\n"。
+# 原写法与 worker 的 stop=["\n\n"] 撞车（虽然 llama.cpp 会区分
+# prompt 与生成部分，但没有必要冒这个险），单个换行足够分隔。
+ZH_TMPL = "将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n{text}"
+EN_TMPL = "将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n{text}"
 
 # Hy-MT2 要求使用**语言全名**，不能写 en/zh
 LANG_ZH = "中文"

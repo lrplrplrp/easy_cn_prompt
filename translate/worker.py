@@ -74,16 +74,24 @@ def main():
 
         try:
             load(req["model"], bool(req.get("gpu", True)))
-            out = _llm(
-                req["prompt"],
+            # ★ 必须走 chat 接口，让模型自带的 chat template 生效 ★
+            #
+            # Hy-MT2 是 **Chat 模型**，自带模板（<|hy_User|> / <|hy_Assistant|>）。
+            # 早期用裸文本走 completion 接口 —— 在 CPU/ROCm 上"碰巧可用"
+            # （模型够强），但在 CUDA 后端上会**把输入当成待续写的文本**，
+            # 输出"继续编的句子"而不是翻译。
+            params = dict(
                 max_tokens=int(req.get("max_tokens", 128)),
                 temperature=float(req.get("temperature", 0.7)),
                 top_p=float(req.get("top_p", 0.6)),
                 top_k=int(req.get("top_k", 20)),
                 repeat_penalty=float(req.get("repeat_penalty", 1.05)),
-                stop=["\n\n"],
             )
-            text = (out.get("choices") or [{}])[0].get("text", "")
+            out = _llm.create_chat_completion(
+                messages=[{"role": "user", "content": req["prompt"]}],
+                **params,
+            )
+            text = (out.get("choices") or [{}])[0].get("message", {}).get("content", "")
             print(json.dumps({"ok": True, "text": text}), flush=True)
         except Exception as e:
             print(json.dumps({"ok": False, "error": "%s: %s" % (type(e).__name__, e)}), flush=True)
