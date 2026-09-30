@@ -24,15 +24,18 @@ git clone https://github.com/lrplrplrp/easy_cn_prompt.git
 
 重启 ComfyUI，节点列表里会出现 `Easy CN Prompt (中文提示词)`。
 
+> **Windows 用户**：直接在 `ComfyUI\custom_nodes\` 文件夹里打开终端执行上面两行即可
+> （`git clone` 也可换成手动下载 ZIP 解压，注意解压后的文件夹名要是 `easy_cn_prompt`）。
+
 <details>
 <summary>开发时想用符号链接（改代码免重启）</summary>
 
 ```bash
-ln -s /path/to/easy_cn_prompt/easy_cn_prompt \
+ln -s /path/to/easy_cn_prompt \
       /path/to/ComfyUI/custom_nodes/easy_cn_prompt
 ```
 
-注意链接目标是仓库里的 **`easy_cn_prompt/` 子目录**，不是仓库根目录。
+Windows 可用管理员命令行：`mklink /D "<ComfyUI>\custom_nodes\easy_cn_prompt" "<仓库路径>"`
 
 </details>
 
@@ -43,20 +46,32 @@ ln -s /path/to/easy_cn_prompt/easy_cn_prompt \
 | 补全 / 词块编辑 | ✅ | 词库已随仓库提供 |
 | 词库管理 | ✅ | |
 | 编辑已收录词的分类 | ✅ | |
-| **自动分类** | ⚠️ 需装依赖 | 模型已提供，依赖需装：`bash install_classify.sh` |
+| **自动分类** | ⚠️ 需装依赖 | 模型已提供，依赖需装（约 200MB） |
 | **本地翻译** | ⚠️ 需下模型 | 见下方 |
 
+**自动分类的依赖**（装到插件独立目录，不动 ComfyUI 环境）：
+
 ```bash
-# 自动分类的依赖（约 200MB，装到插件独立目录，不动 ComfyUI 环境）
+# Linux / macOS
 bash install_classify.sh
 ```
 
-翻译模型约 1.1GB，不便随仓库分发：
+```bat
+:: Windows（在插件目录下执行，python 换成 ComfyUI 的）
+python -m pip install --target data\cls_pkgs --no-deps ^
+  setfit sentence-transformers pandas pyarrow datasets ^
+  accelerate dill multiprocess xxhash evaluate
+```
+
+**翻译模型**约 1.1GB，不便随仓库分发：
 
 ```bash
 cd /path/to/ComfyUI/models/easy_cn_prompt
 wget https://hf-mirror.com/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf
 ```
+
+> Windows 可把 `wget` 换成浏览器直接下载，放到
+> `ComfyUI\models\easy_cn_prompt\` 目录（没有就新建）。
 
 ## 快速上手
 

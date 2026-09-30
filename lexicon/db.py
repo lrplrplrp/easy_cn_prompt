@@ -117,7 +117,12 @@ QUALITY_TAGS = [
 
 # 注意：插件通常以**符号链接**形式装进 custom_nodes，__file__ 会被解析成真实路径。
 # 因此这里用 realpath，保证在开发目录和 custom_nodes 两种情况下都能定位到正确位置。
+#
+# 本文件位于 <插件根>/lexicon/db.py → 父目录即插件根。
+# （v0.19.0 起仓库结构扁平化：__init__.py 直接在仓库根，
+#   用户 clone 到 custom_nodes 后目录名就是插件名，不必再进一层。）
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+# 插件根的**上一级**：开发时是仓库所在的父目录，可用于找同级的词库仓库
 WORKSPACE_ROOT = os.path.dirname(_PLUGIN_ROOT)
 
 # 词库目录名（仓库根目录下的子目录）

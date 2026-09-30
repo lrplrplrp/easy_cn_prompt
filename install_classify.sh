@@ -3,27 +3,32 @@
 #
 # 为什么单独装：
 #   setfit / sentence-transformers 会拖入 pandas、pyarrow、datasets 等，
-#   并会把 fsspec 从 2026.7.0 降级到 2026.6.0。
-#   而 fsspec 被 huggingface_hub 和 torch 依赖 ——
+#   并会把 fsspec 降级。而 fsspec 被 huggingface_hub 和 torch 依赖 ——
 #   直接装进 ComfyUI 环境有**破坏现有环境**的风险
 #   （尤其 torch 若是 ROCm/CUDA 定制版）。
 #
 # 因此用 pip --target 装到插件自己的目录，靠 sys.path 隔离加载。
 #
 # 用法：
-#   bash install_classify.sh /path/to/ComfyUI/venv/bin/python
-#   或直接        bash install_classify.sh          # 自动探测 ComfyUI venv
+#   bash install_classify.sh                          # 自动探测 Python
+#   bash install_classify.sh /path/to/venv/bin/python # 手动指定
+#
+# Windows 用户：请在 **ComfyUI 的 Python** 下执行等价命令
+#   （见 README「安装 → 自动分类」的 Windows 说明）
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET="$HERE/easy_cn_prompt/data/cls_pkgs"
+TARGET="$HERE/data/cls_pkgs"
 
 # ── 找 Python ──
+# 优先用显式传入的，其次探测常见的 ComfyUI venv 位置，最后退回 PATH 里的 python3
 PY="${1:-}"
 if [ -z "$PY" ]; then
   for c in \
-    "$HOME/Applications/ComfyUI/ComfyUI/venv/bin/python" \
+    "$HERE/../venv/bin/python" \
     "$HERE/../../venv/bin/python" \
+    "$HOME/ComfyUI/venv/bin/python" \
+    "$HOME/Applications/ComfyUI/ComfyUI/venv/bin/python" \
     "$(command -v python3 || true)"; do
     if [ -n "$c" ] && [ -x "$c" ]; then PY="$c"; break; fi
   done
@@ -61,4 +66,4 @@ done
 
 echo
 echo "✅ 完成。依赖已装在插件内，ComfyUI 环境未被改动。"
-echo "   接着准备模型：见 README「自动分类待确认」章节。"
+echo "   接着重启 ComfyUI，「分类待确认」按钮即可用。"

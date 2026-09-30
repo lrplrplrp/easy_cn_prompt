@@ -98,13 +98,17 @@ def _spawn() -> subprocess.Popen:
     """启动 worker 子进程。"""
     env = dict(os.environ)
     env[_WORKER_ENV] = "1"
-    # 子进程需要能找到插件包，直接内联源码执行，避免导入插件 __init__
+    # Windows 下 Python 子进程的 stdout 默认用系统编码（cp936/GBK），
+    # 中文会乱码甚至抛 UnicodeDecodeError。这里强制 UTF-8。
+    env["PYTHONIOENCODING"] = "utf-8"
     proc = subprocess.Popen(
         [sys.executable, "-c", _worker_code()],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",     # ★ 与 PYTHONIOENCODING 一致
+        errors="replace",     # 万一有非法字节，替换而不是崩溃
         bufsize=1,
         env=env,
     )
@@ -184,18 +188,32 @@ _gpu_disabled = False
 
 
 def _readline_timeout(proc, timeout: float) -> str | None:
-    """带超时地读一行；超时返回 None。"""
-    import selectors
+    """带超时地读一行；超时返回 None。
 
-    sel = selectors.DefaultSelector()
-    sel.register(proc.stdout, selectors.EVENT_READ)
+    ⚠️ **不能只用 selectors**（Windows 上 DefaultSelector 只支持 socket，
+    对管道会抛 OSError WinError 10038 —— 这是 Windows 用户翻译必崩的原因）。
+
+    做法：后台线程阻塞读一行 → 放进队列 → 主线程带超时取。
+    这样 Linux / Windows 行为一致。
+    """
+    import queue
+    import threading
+
+    q: queue.Queue = queue.Queue(maxsize=1)
+
+    def _reader() -> None:
+        try:
+            q.put(proc.stdout.readline())
+        except Exception:  # noqa: BLE001
+            q.put("")          # 读取失败 → 当作 EOF
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
     try:
-        ready = sel.select(timeout)
-        if not ready:
-            return None
-        return proc.stdout.readline()
-    finally:
-        sel.close()
+        return q.get(timeout=timeout)
+    except queue.Empty:
+        # 超时：读线程仍在阻塞，但不影响后续 kill（kill 会让 readline 抛错退出）
+        return None
 
 
 def _kill_worker_locked() -> None:

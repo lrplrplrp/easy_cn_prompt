@@ -4,17 +4,17 @@ __pycache__/
 *.pyo
 
 # ── 个人数据（插件首次运行会自动创建）──
-easy_cn_prompt/data/custom_dict.db
-easy_cn_prompt/data/custom_dict.db.bak*
+data/custom_dict.db
+data/custom_dict.db.bak*
 
 # ── 词库备份（体积大，属调试产物）──
-easy_cn_prompt/data/tag.sqlite.bak*
-easy_cn_prompt/data/*.bak*
+data/tag.sqlite.bak*
+data/*.bak*
 *.bak
 *.bak.*
 
 # ── 分类功能的 pip 依赖（用 install_classify.sh 自行安装）──
-easy_cn_prompt/data/cls_pkgs/
+data/cls_pkgs/
 
 # ── 分类中间产物 ──
 data/auto_classify_result.json
