@@ -36,12 +36,25 @@ def model_dir() -> str:
 
 
 def available() -> tuple[bool, str]:
-    if not os.path.isdir(_PKG_DIR):
-        return False, f"未找到依赖目录：{_PKG_DIR}"
+    """检查分类功能是否可用。
+
+    返回 (是否可用, 说明)。说明是**给用户看的**，必须包含"怎么修"，
+    不能只丢一个路径 —— 用户不知道那是什么意思。
+    """
     if not os.path.isdir(_MODEL_DIR):
-        return False, f"未找到分类模型：{_MODEL_DIR}"
+        return False, (
+            "缺少分类模型。请确认插件完整下载（data/models/setfit_cls/ 目录），"
+            "然后重启 ComfyUI。"
+        )
+    if not os.path.isdir(_PKG_DIR):
+        # 依赖体积大（约 200MB），不随仓库分发，需要用户自己装
+        return False, (
+            "尚未安装分类依赖（首次使用需要，约 200MB）。"
+            "在插件目录执行：python install_classify.py"
+            "（脚本会自动找到 ComfyUI 的 Python），然后重启 ComfyUI。"
+        )
     if _LOAD_ERROR:
-        return False, _LOAD_ERROR
+        return False, f"分类依赖加载失败：{_LOAD_ERROR}"
     return True, "就绪"
 
 

@@ -49,19 +49,31 @@ Windows 可用管理员命令行：`mklink /D "<ComfyUI>\custom_nodes\easy_cn_pr
 | **自动分类** | ⚠️ 需装依赖 | 模型已提供，依赖需装（约 200MB） |
 | **本地翻译** | ⚠️ 需下模型 | 见下方 |
 
-**自动分类的依赖**（装到插件独立目录，不动 ComfyUI 环境）：
+**自动分类的依赖**（约 200MB，装到插件独立目录，**不动 ComfyUI 环境**）：
+
+在插件目录下执行（**三个平台通用**）：
 
 ```bash
-# Linux / macOS
+python install_classify.py
+```
+
+脚本会自动找到 ComfyUI 的 Python。找不到时手动指定：
+
+```bat
+:: Windows
+python install_classify.py "C:\ComfyUI\venv\Scripts\python.exe"
+```
+
+```bash
+# Linux / macOS（也可用 shell 版）
 bash install_classify.sh
 ```
 
-```bat
-:: Windows（在插件目录下执行，python 换成 ComfyUI 的）
-python -m pip install --target data\cls_pkgs --no-deps ^
-  setfit sentence-transformers pandas pyarrow datasets ^
-  accelerate dill multiprocess xxhash evaluate
-```
+装完**重启 ComfyUI**。
+
+> **没装的后果**：「分类待确认」按钮会**灰显**，悬停提示
+> 「尚未安装分类依赖（首次使用需要）…」。
+> 其余功能（补全、词块编辑、词库管理）**不受影响**。
 
 **翻译模型**约 1.1GB，不便随仓库分发：
 
@@ -308,6 +320,22 @@ v0.16.1 已修。原因是空闲清理线程和请求处理争抢同一把锁导
 ### 提示「找不到翻译模型」？
 
 模型没下载或放错位置，见「安装 → 2. 安装可选功能」。
+
+### 「分类待确认」按钮是灰的 / 提示「未找到依赖目录」？
+
+**分类依赖没装**（约 200MB，不随仓库分发）。在插件目录执行：
+
+```bash
+python install_classify.py
+```
+
+然后**重启 ComfyUI**。启动日志会显示状态：
+
+```
+[EasyCNPrompt] 自动分类：不可用 —— 尚未安装分类依赖（首次使用需要…）
+```
+
+装好后变成 `自动分类：就绪`。**其余功能不受影响。**
 
 ### 补全找不到某些词？
 
