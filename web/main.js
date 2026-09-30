@@ -1633,7 +1633,11 @@ export class ChunkEditor {
     this.updateBarInfo();
 
     if (data.fail_count) {
-      toast(`翻译完成 ${done} 个，失败 ${data.fail_count} 个`, done === 0);
+      // 失败原因可能是模型跑偏（返回说明/道歉而非译文）。
+      // 后端会重试一次，仍失败才报错 —— 此时**不会**把错误内容写进词块，
+      // 所以这里要明确告诉用户「原文没被动过」，避免以为翻译生效了。
+      const hint = done === 0 ? "（词块内容未改动）" : "";
+      toast(`翻译完成 ${done} 个，失败 ${data.fail_count} 个${hint}`, true);
     } else if (lexiconHits) {
       toast(`已翻译 ${done} 个，其中 ${lexiconHits} 个匹配到词库`);
     }

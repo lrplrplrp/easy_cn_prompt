@@ -25,7 +25,7 @@ async def status(request: web.Request) -> web.Response:
         "custom_count": custom_dict.count(),
         "categories": {str(k): v for k, v in CATEGORY_META.items()},
         "translate_backends": [],  # 二期填充，前端据此动态渲染
-        "version": "0.19.0-demo",
+        "version": "0.19.1-demo",
     })
 
 

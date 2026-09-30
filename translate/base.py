@@ -17,6 +17,11 @@ import threading
 _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 
+def _log(msg: str) -> None:
+    """打印到 ComfyUI 控制台（便于用户排查翻译问题）。"""
+    print(f"[EasyCNPrompt/翻译] {msg}", flush=True)
+
+
 def models_dir() -> str:
     """翻译模型的存放目录：ComfyUI/models/easy_cn_prompt/"""
     try:
@@ -73,10 +78,12 @@ def resolve_model(name: str) -> str | None:
 # --------------------------------------------------------------------------
 
 # 中 ⇄ 外：官方模板
+# Hy-MT2 是**腾讯的中英翻译模型**，提示词模板应当**两个方向都用中文**。
+# 早期 en2zh 用的是英文模板（"Translate ... into Chinese"），
+# 在 CUDA 后端上实测会输出"抱歉/说明"类的无关英文长串 —— 且目标语言
+# 写成英文单词 "Chinese" 也不符合模型训练时的表述习惯。
 ZH_TMPL = "将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
-# 外 ⇄ 外
-EN_TMPL = ("Translate the following text into {target}. Note that you should only output "
-           "the translated result without any additional explanation:\n\n{text}")
+EN_TMPL = "将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
 
 # Hy-MT2 要求使用**语言全名**，不能写 en/zh
 LANG_ZH = "中文"
@@ -130,10 +137,9 @@ def detect_direction(text: str) -> bool:
 
 
 def build_prompt(text: str, to_english: bool) -> str:
-    """按官方模板拼提示词。target 必须用语言全名。"""
-    if to_english:
-        return ZH_TMPL.format(target=LANG_EN, text=text)
-    return EN_TMPL.format(target="Chinese", text=text)
+    """拼提示词。target 必须用**中文语言全名**（模型要求，不能写 en/zh）。"""
+    target = LANG_EN if to_english else LANG_ZH
+    return ZH_TMPL.format(target=target, text=text)
 
 
 _WS_RE = re.compile(r"\s+")
@@ -165,6 +171,43 @@ def clean_output(s: str) -> str:
     # 统一小写后交给各模型的输出规则再处理（下划线/前缀等）。
     t = t.lower()
     return t
+
+
+# 「模型没在翻译，而是在解释/道歉」的典型特征
+_STRAY_EN_RE = re.compile(
+    r"(i cannot|i can't|i'm sorry|i am sorry|as an ai|"
+    r"here (?:is|are) the translation|the text you provided|"
+    r"please provide|no translation|无法翻译|抱歉|对不起)",
+    re.I,
+)
+
+
+def looks_like_failed_translation(raw: str, out: str, to_english: bool) -> bool:
+    """判断译文是否「明显不是译文」（模型跑偏了）。
+
+    典型症状：英译中时返回一长串**英文说明**（"I cannot assist…"、
+    "Here is the translation of…"），而不是中文。
+    这类内容会被 word 显示成"无关的长串英文"，必须拦下来。
+
+    判定：
+      · 命中道歉/解释类句式 → 失败
+      · **英译中**却几乎全是 ASCII（没有汉字）且明显过长 → 失败
+    """
+    if not out:
+        return False
+    if _STRAY_EN_RE.search(out):
+        return True
+
+    if not to_english:
+        # 目标是中文，结果却几乎没有 CJK 字符
+        cjk = sum(1 for ch in out if "\u4e00" <= ch <= "\u9fff")
+        if cjk == 0:
+            # 短英文标签可能是词库里的正式标签（如 "cat_ears"），
+            # 但**超过 3 个单词**的纯英文句子一定是跑偏了
+            words = [w for w in re.split(r"[\s_]+", out) if w]
+            if len(words) > 3:
+                return True
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -200,7 +243,22 @@ class LlamaGgufTranslator(Translator):
             raise RuntimeError(f"找不到模型：{self.model_name}")
         prompt = build_prompt(text, to_english)
         raw = worker.run_translate(self.model_path, prompt)
-        return clean_output(raw)
+        out = clean_output(raw)
+
+        # ★ 跑偏检测 + 重试一次 ★
+        # 模型偶尔会不翻译而输出说明/道歉（CUDA 后端上更常见），
+        # 这类内容会被当成译文塞进 cn 字段，表现为"无关的长串英文"。
+        # 检测到就重试一次；仍失败则抛错，让上层按"翻译失败"处理 ——
+        # 宁可没有译文，也不要把错误内容写进词块。
+        if looks_like_failed_translation(raw, out, to_english):
+            _log(f"译文疑似跑偏，重试一次：{out[:60]!r}")
+            raw2 = worker.run_translate(self.model_path, prompt)
+            out2 = clean_output(raw2)
+            if looks_like_failed_translation(raw2, out2, to_english):
+                _log(f"重试仍跑偏，放弃：{out2[:60]!r}")
+                raise RuntimeError(f"翻译结果异常（模型未按要求输出）：{out2[:80]}")
+            return out2
+        return out
 
 
 class OpenAICompatTranslator(Translator):
