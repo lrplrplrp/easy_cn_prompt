@@ -25,7 +25,7 @@ async def status(request: web.Request) -> web.Response:
         "custom_count": custom_dict.count(),
         "categories": {str(k): v for k, v in CATEGORY_META.items()},
         "translate_backends": [],  # 二期填充，前端据此动态渲染
-        "version": "0.21.3-demo",
+        "version": "0.21.4-demo",
     })
 
 
@@ -288,32 +288,39 @@ async def translate(request: web.Request) -> web.Response:
             one = lex.lookup_en(text)          # ★ 完全匹配，不再 search 兜底
             hits = [one] if one else []
 
-        # ★ 先用**纯英文部分**查一次词库/质量词 ★
+        # ★ 中英混合时，先单独拿英文部分查一次词库 ★
         #
         # 前端送来的是「中文名 英文标签」（如 "杰作 masterpiece"），
         # 含中文 → 会被判定为 zh2en 方向并拿**整串**去查词库 —— 查不到。
         # 但英文部分本身可能就是内置质量词（masterpiece）或已有官方标签，
         # 这类词**根本不需要翻译**，直接查出来返回即可。
-        en_only = text
-        for tok in text.replace("，", ",").split():
-            tok = tok.strip()
-            if tok and not tb.has_cjk(tok):
-                en_only = tok          # 取最后一个无 CJK 的 token（即英文标签）
-                break
-        if en_only != text:
-            pre = lex.lookup_en(en_only)
-            if pre:
-                results.append({
-                    "text": text,
-                    "translation": pre["en"],
-                    "direction": "pre-matched",
-                    "en": pre["en"],
-                    "cn": pre["cn"] or text,
-                    "category": pre.get("category", 5),
-                    "lexicon_hit": True,
-                    "ok": True,
-                })
-                continue
+        #
+        # ⚠️ 必须**先确认整串确实中英混合**才能这么做。
+        #    早期版本只判断"第一个英文 token 是否等于整串"，
+        #    于是纯英文多词输入（如 "clean teeth"）被误判为混合，
+        #    拿第一个词 "clean" 去查 → 命中质量词 → 直接返回 "clean"，
+        #    后面的 "teeth" 被丢掉（用户反馈的现象）。
+        if tb.is_mixed(text):
+            en_only = ""
+            for tok in text.replace("，", ",").split():
+                tok = tok.strip()
+                if tok and not tb.has_cjk(tok):
+                    en_only = tok          # 取第一个纯英文 token（即英文标签）
+                    break
+            if en_only:
+                pre = lex.lookup_en(en_only)
+                if pre:
+                    results.append({
+                        "text": text,
+                        "translation": pre["en"],
+                        "direction": "pre-matched",
+                        "en": pre["en"],
+                        "cn": pre["cn"] or text,
+                        "category": pre.get("category", 5),
+                        "lexicon_hit": True,
+                        "ok": True,
+                    })
+                    continue
 
         if hits:
             found = hits[0]
