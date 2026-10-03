@@ -228,6 +228,13 @@ body.ecp-dragging-active .ecp-editor { cursor:grabbing; }
 .ecp-batch-opt.ecp-on { background:#3f5271; color:#e6ecf7; border-color:#5b78a8; }
 .ecp-batch-off.ecp-on { background:#6b3a3a; border-color:#8f4a4a; color:#f5dede; }
 .ecp-batch-on.ecp-on  { background:#2f5d3a; border-color:#3d7a4a; color:#d6f0dc; }
+.ecp-batch-copy {
+  background:#33415a; color:#cfe0f5; border:1px solid #46587a;
+  border-radius:4px; padding:3px 10px; font-size:11.5px;
+  cursor:pointer; font-family:inherit; margin-left:8px;
+}
+.ecp-batch-copy:hover { background:#3f5271; border-color:#5b78a8; }
+.ecp-batch-copy.ecp-copied { background:#2f5d3a; border-color:#3d7a4a; color:#d6f0dc; }
 /* 批量弹窗底栏：按钮右对齐（设置页的是左对齐） */
 .ecp-batch-foot { justify-content:flex-end; }
 
@@ -1228,8 +1235,8 @@ export class ChunkEditor {
     // 批量禁用：按类型批量开关词块
     const btnBatch = document.createElement("button");
     btnBatch.className = "ecp-bar-btn";
-    btnBatch.textContent = "批量禁用";
-    btnBatch.title = "按类型批量禁用/启用词块";
+    btnBatch.textContent = "批量操作";
+    btnBatch.title = "按类型批量禁用/启用，或复制该类型的输出";
     btnBatch.addEventListener("mousedown", (e) => {
       e.preventDefault();
       openBatchToggle(this);
@@ -3507,6 +3514,68 @@ function inlinePrompt(host, label, initial = "") {
 /* 批量禁用（按类型）                                                   */
 /* ------------------------------------------------------------------ */
 
+
+/**
+ * 复制某一类型词块的**输出格式**到剪贴板。
+ *
+ * 「与节点实际输出一致」意味着要套用 `base_model` 的规则
+ * （下划线转空格、画师 @ 前缀、权重语法等）—— 这些规则都在 Python 侧，
+ * 所以把该类型的词块序列化后送去 `/format` 拿结果。
+ *
+ * 规则（与需求方确认）：
+ *   · 输出英文标签，逗号分隔
+ *   · 带权重（有设过的话）
+ *   · **跳过已禁用的词块**（它们不输出）
+ *
+ * @returns {Promise<string|null>} 复制成功的文本；失败返回 null
+ */
+async function copyTypeOutput(editorComp, chunks) {
+  // 只取"会输出"的词块：跳过禁用的
+  const live = (chunks || []).filter((c) => c.isConnected && !c.dataset.disabled);
+  if (!live.length) {
+    toast("该类型的词块都已禁用，没有可复制的内容", true);
+    return null;
+  }
+
+  // 序列化成 <chunk> 文本（只含该类型的词块）
+  const text = live.map((c) => serializeChunk(c)).join("");
+
+  let out = text;
+  try {
+    const r = await fetch(`/${EXT}/format`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, base_model: editorComp.baseModel() }),
+    });
+    const j = await r.json();
+    if (j.ok && typeof j.text === "string") out = j.text;
+  } catch (e) {
+    LOG("格式化失败，回退用原始序列化结果", e);
+  }
+
+  try {
+    await navigator.clipboard.writeText(out);
+    toast(`已复制 ${live.length} 个词块的输出`);
+    return out;
+  } catch (e) {
+    // 剪贴板 API 在非安全上下文/无权限时会失败 —— 回退到旧接口
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = out;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      toast(`已复制 ${live.length} 个词块的输出`);
+      return out;
+    } catch (e2) {
+      toast(`复制失败：${e2.message}`, true);
+      return null;
+    }
+  }
+}
+
 /**
  * 打开「批量禁用」弹窗：按类型列出编辑框里**实际存在的**词块，
  * 逐个切换选中状态，确认后批量应用。
@@ -3546,11 +3615,13 @@ function openBatchToggle(editorComp) {
 
   box.innerHTML = `
     <div class="ecp-modal-head">
-      <span>批量禁用 / 启用</span>
+      <span>批量操作</span>
       <button class="ecp-modal-close" title="关闭">×</button>
     </div>
     <div class="ecp-modal-tip">
-      选择要处理哪些类型，点「确定」批量应用。<b>已是目标状态的词块不会变更。</b>
+      选「禁用 / 启用」后点「确定」批量应用；或点每行的
+      <b>复制</b> 把该类型的输出格式拷到剪贴板。<br>
+      <b>已是目标状态的词块不会变更</b>；复制会跳过已禁用的词块。
     </div>
     <div class="ecp-batch-list"></div>
     <div class="ecp-modal-foot ecp-batch-foot">
@@ -3613,6 +3684,26 @@ function openBatchToggle(editorComp) {
     });
     seg.append(...btns);
     row.appendChild(seg);
+
+    // ── 复制：把该类型的输出格式拷到剪贴板 ──
+    const cp = document.createElement("button");
+    cp.className = "ecp-batch-copy";
+    cp.textContent = "复制";
+    cp.title = "复制该类型词块的输出格式（与节点实际输出一致，跳过已禁用的）";
+    cp.addEventListener("mousedown", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const text = await copyTypeOutput(editorComp, groups.get(cat).chunks);
+      if (text === null) return;
+      cp.textContent = "已复制";
+      cp.classList.add("ecp-copied");
+      setTimeout(() => {
+        cp.textContent = "复制";
+        cp.classList.remove("ecp-copied");
+      }, 1200);
+    });
+    row.appendChild(cp);
+
     listEl.appendChild(row);
   });
 

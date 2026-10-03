@@ -9,7 +9,7 @@ from aiohttp import web
 
 from ..lexicon.db import CATEGORY_META, get_lexicon
 from ..lexicon.db import _has_cjk
-from ..nodes.cn_prompt_node import parse_weight_syntax
+from ..nodes.cn_prompt_node import parse_chunks, parse_weight_syntax
 
 ROUTES = web.RouteTableDef()
 
@@ -25,7 +25,7 @@ async def status(request: web.Request) -> web.Response:
         "custom_count": custom_dict.count(),
         "categories": {str(k): v for k, v in CATEGORY_META.items()},
         "translate_backends": [],  # 二期填充，前端据此动态渲染
-        "version": "0.20.2-demo",
+        "version": "0.21.0-demo",
     })
 
 
@@ -712,3 +712,37 @@ async def builtin_set_category(request: web.Request) -> web.Response:
         pairs = [[body["en"], body.get("category", 0)]]
     res = update_builtin_categories([(p[0], p[1]) for p in pairs if len(p) >= 2])
     return web.json_response(res, status=200 if res.get("ok") else 400)
+
+
+@ROUTES.post("/easy_cn_prompt/format")
+async def format_prompt(request: web.Request) -> web.Response:
+    """把编辑器内容格式化成**最终会输出的提示词文本**。
+
+    请求：{"text": "<chunk>..</chunk>,...", "base_model": "Anima"}
+    返回：{"ok": true, "text": "1girl, long hair, smile"}
+
+    用途：前端「批量操作 → 复制」需要拿到与节点**完全一致**的输出格式
+    （下划线转空格、画师 @ 前缀、权重语法等规则都在 Python 侧）。
+    这里直接复用节点的 parse_chunks，保证逐字节一致。
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return web.json_response({"ok": False, "error": "请求体不是合法 JSON"}, status=400)
+
+    text = body.get("text", "")
+    base_model = body.get("base_model", "") or ""
+    sep = body.get("separator", ", ")
+
+    # base_model 非法时退回默认，避免 _rules_for 出问题
+    from ..nodes.cn_prompt_node import BASE_MODELS
+
+    if base_model not in BASE_MODELS:
+        base_model = BASE_MODELS[0]
+
+    try:
+        out, _disabled = parse_chunks(text or "", sep, False, base_model)
+    except Exception as exc:  # noqa: BLE001
+        return web.json_response({"ok": False, "error": f"格式化失败：{exc}"}, status=400)
+
+    return web.json_response({"ok": True, "text": out})
