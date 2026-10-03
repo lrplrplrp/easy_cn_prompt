@@ -1263,8 +1263,15 @@ export class ChunkEditor {
     this._syncing = false;
     this._wiredText = null;
     this._composing = false;
+    this._composingHint = false;   // 首个字符的 input 可能早于 compositionstart
 
-    this.editor.addEventListener("input", () => this.onInput());
+    this.editor.addEventListener("input", (e) => {
+      // 记录"这次 input 是否来自输入法组合" —— 首个字符的 input 可能
+      // 早于 compositionstart，用它兜底判断。
+      // 非组合的 input 要显式清掉，避免标志残留导致组合保护永久生效。
+      this._composingHint = !!e?.isComposing;
+      this.onInput();
+    });
     // ★ 必须挂**捕获阶段** ★
     // 编辑器上还有一个捕获阶段的 _blockCanvasShortcuts，它会对
     // Backspace/Delete/Arrow 调用 stopPropagation() —— 在捕获阶段调用
@@ -1287,6 +1294,7 @@ export class ChunkEditor {
     this.editor.addEventListener("compositionstart", () => { this._composing = true; });
     this.editor.addEventListener("compositionend", () => {
       this._composing = false;
+      this._composingHint = false;
       // 输入法提交时 beforeinput 可能被跳过，这里兜底转换刚输入的中文逗号
       if (this.convertJustTypedComma()) {
         this.syncToWidget(true);
@@ -1769,6 +1777,22 @@ export class ChunkEditor {
     this._ready = true;
     this.syncToWidget(true);
     LOG("编辑器已挂载到节点", node.id);  }
+
+  /**
+   * 输入法是否正在组合。
+   *
+   * `this._composing` 由 compositionstart/end 维护，但**首个字符**的
+   * input 事件可能早于 compositionstart（各输入法时序不同）。
+   * 这里再通过"当前输入事件的 isComposing"兜一层 ——
+   * 用一个在 input 监听器里记录的标志。
+   */
+  _imeActive() {
+    if (this._composing) return true;
+    // 浏览器在组合期间的 input 事件带 isComposing=true
+    // （onInput 里没有事件对象，改用全局标记：任何最近一次
+    //  input 处于组合中就置位，compositionend 清掉）
+    return !!this._composingHint;
+  }
 
   setValue(text) {
     deserializeInto(this.editor, text || "");
@@ -2280,10 +2304,18 @@ export class ChunkEditor {
     // 此时若同步一次就会把用户内容抹成空串，节点随后静默无输出。
     // 一旦发现要写空、而 widget 里还有内容，就先用 widget 的内容回填编辑器。
     //
-    // ⚠️ 但**用户主动点「清空」时必须放行** ——
-    // 否则这个防线会把旧内容回填回来，表现为"清空后再粘贴，
-    // 输出的还是旧提示词"。
-    if (!s && this.widget.value && !this._ready && !this._explicitClear) {
+    // ⚠️ 用户主动点「清空」时必须放行 —— 否则会把旧内容回填回来，
+    //    表现为"清空后再粘贴，输出的还是旧提示词"。
+    //
+    // ⚠️★ 输入法组合期间必须放行 ★⚠️
+    //    拼音在浏览器的"组合区"里，**不在 DOM 文本节点里** ——
+    //    于是 serializeEditor 返回空串，防线误判为"编辑器被清空"，
+    //    deserializeInto 会**重建整个编辑器 DOM**，直接打断输入法组合。
+    //    用户感知：按 w 然后空格选字，结果是「w我」（w 被上屏、组合丢失）。
+    //    这个 bug 只在"编辑器里还没内容 + widget 有旧值"时出现，
+    //    所以看起来像是"有悬浮窗时才触发"（悬浮窗改变了输入时序）。
+    if (!s && this.widget.value && !this._ready && !this._explicitClear
+        && !this._composing && !this._imeActive()) {
       LOG("检测到编辑器为空但 widget 有值，先回填编辑器", this.widget.value.slice(0, 40));
       deserializeInto(this.editor, this.widget.value);
       this._ready = true;
