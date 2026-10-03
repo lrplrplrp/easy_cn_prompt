@@ -207,6 +207,30 @@ body.ecp-dragging-active .ecp-editor { cursor:grabbing; }
 }
 .ecp-sec-foot { display:flex; gap:8px; padding:8px 0 4px; }
 
+/* ---- 批量禁用弹窗 ---- */
+.ecp-batch-modal { width:min(560px, 92vw); }
+.ecp-batch-list { overflow-y:auto; padding:6px 14px 10px; }
+.ecp-batch-row {
+  display:flex; align-items:center; gap:8px;
+  padding:7px 4px; border-bottom:1px solid #333a47;
+}
+.ecp-batch-row:last-child { border-bottom:none; }
+.ecp-batch-name { font-size:13px; }
+.ecp-batch-stat { color:#7b8496; font-size:11.5px; margin-left:2px; flex:1; }
+.ecp-batch-seg { display:flex; gap:0; }
+.ecp-batch-opt {
+  background:#2b313b; color:#9aa3b2; border:1px solid #3a4150;
+  padding:3px 10px; font-size:11.5px; cursor:pointer; font-family:inherit;
+}
+.ecp-batch-opt:first-child { border-radius:4px 0 0 4px; }
+.ecp-batch-opt:last-child { border-radius:0 4px 4px 0; }
+.ecp-batch-opt + .ecp-batch-opt { border-left:none; }
+.ecp-batch-opt.ecp-on { background:#3f5271; color:#e6ecf7; border-color:#5b78a8; }
+.ecp-batch-off.ecp-on { background:#6b3a3a; border-color:#8f4a4a; color:#f5dede; }
+.ecp-batch-on.ecp-on  { background:#2f5d3a; border-color:#3d7a4a; color:#d6f0dc; }
+/* 批量弹窗底栏：按钮右对齐（设置页的是左对齐） */
+.ecp-batch-foot { justify-content:flex-end; }
+
 /* ---- 置信度滑块 ---- */
 .ecp-conf-row {
   display:flex; align-items:center; gap:12px; padding:6px 2px;
@@ -1189,6 +1213,16 @@ export class ChunkEditor {
       this.sortChunks();
     });
 
+    // 批量禁用：按类型批量开关词块
+    const btnBatch = document.createElement("button");
+    btnBatch.className = "ecp-bar-btn";
+    btnBatch.textContent = "批量禁用";
+    btnBatch.title = "按类型批量禁用/启用词块";
+    btnBatch.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      openBatchToggle(this);
+    });
+
     // 设置（原「词库管理」）
     const btnDicts = document.createElement("button");
     btnDicts.className = "ecp-bar-btn";
@@ -1203,7 +1237,7 @@ export class ChunkEditor {
     this.barInfo.className = "ecp-bar-info";
     this.barInfo.textContent = "粘贴整段提示词会自动转成词块";
 
-    this.bar.append(btnClear, btnTrans, btnCls, btnCollect, btnSort, btnDicts, this.barInfo);
+    this.bar.append(btnClear, btnTrans, btnCls, btnCollect, btnSort, btnBatch, btnDicts, this.barInfo);
     this.root.appendChild(this.bar);
 
     this.editor = document.createElement("div");
@@ -3380,6 +3414,157 @@ function inlinePrompt(host, label, initial = "") {
 }
 
 
+
+
+/* ------------------------------------------------------------------ */
+/* 批量禁用（按类型）                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 打开「批量禁用」弹窗：按类型列出编辑框里**实际存在的**词块，
+ * 逐个切换选中状态，确认后批量应用。
+ *
+ * 规则（与需求方确认）：
+ *   · 只列出现有词块中真实出现过的类型
+ *   · 每类可分别选择「禁用」或「启用」
+ *   · 已处于目标状态的词块**保持不动**（不重复操作）
+ */
+function openBatchToggle(editorComp) {
+  const ed = editorComp.editor;
+
+  // 统计：类型 → {total, disabled, chunk[]}
+  const groups = new Map();
+  for (const c of ed.querySelectorAll(".ecp-chunk")) {
+    const cat = String(c.dataset.category || "0");
+    if (!groups.has(cat)) groups.set(cat, { total: 0, disabled: 0, chunks: [] });
+    const g = groups.get(cat);
+    g.total++;
+    if (c.dataset.disabled) g.disabled++;
+    g.chunks.push(c);
+  }
+
+  if (!groups.size) {
+    toast("编辑框里还没有词块");
+    return;
+  }
+
+  // 按「设置」里的类型顺序排列
+  const cats = window.__ECP_CATEGORIES || {};
+  const keys = [...groups.keys()].sort((a, b) => Number(a) - Number(b));
+
+  const wrap = document.createElement("div");
+  wrap.className = "ecp-modal-mask";
+  const box = document.createElement("div");
+  box.className = "ecp-modal ecp-batch-modal";
+
+  box.innerHTML = `
+    <div class="ecp-modal-head">
+      <span>批量禁用 / 启用</span>
+      <button class="ecp-modal-close" title="关闭">×</button>
+    </div>
+    <div class="ecp-modal-tip">
+      选择要处理哪些类型，点「确定」批量应用。<b>已是目标状态的词块不会变更。</b>
+    </div>
+    <div class="ecp-batch-list"></div>
+    <div class="ecp-modal-foot ecp-batch-foot">
+      <button class="ecp-bar-btn" data-act="save">确定</button>
+      <button class="ecp-bar-btn ecp-bar-ghost" data-act="cancel">取消</button>
+    </div>
+  `;
+  wrap.appendChild(box);
+  document.body.appendChild(wrap);
+
+  const listEl = box.querySelector(".ecp-batch-list");
+  const close = () => wrap.remove();
+  box.querySelector(".ecp-modal-close").addEventListener("click", close);
+  box.querySelector('[data-act="cancel"]').addEventListener("click", close);
+  wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) close(); });
+
+  // mode: null=不处理 | "disable"=禁用 | "enable"=启用
+  const state = new Map(keys.map((k) => [k, null]));
+
+  keys.forEach((cat) => {
+    const g = groups.get(cat);
+    const info = cats[cat] || { label: `类型${cat}`, color: "#888" };
+
+    const row = document.createElement("div");
+    row.className = "ecp-batch-row";
+
+    const dot = document.createElement("span");
+    dot.className = "ecp-dot";
+    dot.style.background = info.color;
+
+    const name = document.createElement("span");
+    name.className = "ecp-batch-name";
+    name.textContent = info.label;
+
+    const stat = document.createElement("span");
+    stat.className = "ecp-batch-stat";
+    stat.textContent = `${g.total} 个${g.disabled ? `（${g.disabled} 已禁用）` : ""}`;
+
+    row.append(dot, name, stat);
+
+    // 三态按钮：不处理 / 禁用 / 启用
+    const seg = document.createElement("div");
+    seg.className = "ecp-batch-seg";
+    const opts = [
+      ["keep", "不处理", null],
+      ["off", "禁用", "disable"],
+      ["on", "启用", "enable"],
+    ];
+    const btns = opts.map(([cls, label, val]) => {
+      const b = document.createElement("button");
+      b.className = `ecp-batch-opt ecp-batch-${cls}` + (val === null ? " ecp-on" : "");
+      b.textContent = label;
+      b.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        state.set(cat, val);
+        btns.forEach((x, i) => x.classList.toggle("ecp-on", opts[i][2] === val));
+      });
+      return b;
+    });
+    seg.append(...btns);
+    row.appendChild(seg);
+    listEl.appendChild(row);
+  });
+
+  box.querySelector('[data-act="save"]').addEventListener("mousedown", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    let off = 0, on = 0;
+    for (const [cat, mode] of state) {
+      if (!mode) continue;
+      const want = mode === "disable";
+      for (const c of groups.get(cat).chunks) {
+        const isDisabled = !!c.dataset.disabled;
+        if (isDisabled === want) continue;      // 已是目标状态 → 不动
+        if (want) {
+          c.dataset.disabled = "1";
+          off++;
+        } else {
+          delete c.dataset.disabled;
+          on++;
+        }
+        paintChunk(c);
+      }
+    }
+
+    editorComp.syncToWidget(true);
+    editorComp.updateBarInfo();
+    close();
+
+    if (!off && !on) {
+      toast("没有需要变更的词块");
+    } else {
+      const parts = [];
+      if (off) parts.push(`禁用 ${off} 个`);
+      if (on) parts.push(`启用 ${on} 个`);
+      toast(`已${parts.join("，")}`);
+    }
+  });
+}
 
 /* ------------------------------------------------------------------ */
 /* 列表拖拽排序（通用）                                                 */
