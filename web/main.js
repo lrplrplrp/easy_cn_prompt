@@ -1067,6 +1067,18 @@ class Autocomplete {
 
   onKeyDown(e) {
     if (!this.el) return;
+
+    // ★ 输入法组合期间一律放行 ★
+    //
+    // 本监听器挂在**捕获阶段**（为了抢在 _blockCanvasShortcuts 之前处理
+    // 方向键）。捕获阶段意味着它比输入法更早拿到 Enter ——
+    // 用户打拼音后按 Enter 上屏时，会被这里 preventDefault + choose()，
+    // 导致拼音没上屏、而**首字母作为普通字符留在了文本框里**。
+    //
+    // 组合期间的所有按键（Enter 上屏、方向键选字）都属于输入法，
+    // 编辑器不能插手。用 e.isComposing（标准）和 this.composing 双重判断。
+    if (this.composing || e.isComposing || e.keyCode === 229) return;
+
     if (e.key === "ArrowDown") { e.preventDefault(); this.move(1); }
     else if (e.key === "ArrowUp") { e.preventDefault(); this.move(-1); }
     else if (e.key === "Enter" || e.key === "Tab") {
@@ -1253,7 +1265,14 @@ export class ChunkEditor {
     this._composing = false;
 
     this.editor.addEventListener("input", () => this.onInput());
-    this.editor.addEventListener("keydown", (e) => this.onKeyDown(e));
+    // ★ 必须挂**捕获阶段** ★
+    // 编辑器上还有一个捕获阶段的 _blockCanvasShortcuts，它会对
+    // Backspace/Delete/Arrow 调用 stopPropagation() —— 在捕获阶段调用
+    // 会阻止事件到达**目标阶段与冒泡阶段**，于是挂在冒泡阶段的
+    // onKeyDown（退格删词块）永远收不到，浏览器原生退格就把词块删了、
+    // 并把光标重置到编辑区开头（表现为"删最后词块时光标跳到最前"）。
+    // 同阶段按注册顺序执行，这里先注册就先处理。
+    this.editor.addEventListener("keydown", (e) => this.onKeyDown(e), true);
     this.editor.addEventListener("keypress", (e) => e.stopPropagation());
     this.editor.addEventListener("keyup", (e) => e.stopPropagation());
     this.editor.addEventListener("paste", (e) => this.onPaste(e), true);
@@ -2435,6 +2454,11 @@ export class ChunkEditor {
     // 否则 Ctrl+C / Delete / Ctrl+A 等会被画布当成"操作节点"。
     e.stopPropagation();
 
+    // ★ 输入法组合期间不插手 ★
+    // 打拼音时按退格是"删拼音字母"，不是"删词块"。
+    // 若这里拦截并 removeChunkWithComma，会误删光标左边的词块。
+    if (this._composing || e.isComposing || e.keyCode === 229) return;
+
     if (e.key !== "Backspace") return;
     const sel = window.getSelection();
     if (!sel || !sel.rangeCount) return;
@@ -2454,16 +2478,32 @@ export class ChunkEditor {
     }
 
     e.preventDefault();
+
+    // ★ 先记下"被删词块前面的兄弟节点"作为还原锚点，再删 ★
+    // 注意不能删完再算 —— target 已经不在 DOM 里了。
     const caret = caretAnchorBefore(target);
     removeChunkWithComma(target);
-    // 光标留在被删词块原来的位置附近，而不是跳到第一个词块后面
-    if (caret) {
-      const range = document.createRange();
+
+    // 光标放回被删词块原来的位置，而不是跳到编辑区开头。
+    //
+    // ⚠️ removeChunkWithComma → ensureCaretAnchor 在编辑器被删空时
+    //    会把光标塞到零宽锚点（也就是"开头"）。
+    //    所以这里必须**在删除之后**重新设置，且要能覆盖那种情况。
+    const range = document.createRange();
+    if (caret && caret.node.isConnected
+        && (caret.node.nodeType !== Node.TEXT_NODE
+            || caret.offset <= caret.node.textContent.length)) {
       range.setStart(caret.node, caret.offset);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
+    } else {
+      // 锚点已失效（它自己也被删了）→ 放到编辑区末尾，
+      // 用户在末尾退格，光标理应停在末尾附近。
+      range.selectNodeContents(this.editor);
+      range.collapse(false);
     }
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+
     this.syncToWidget(true);
   }
 
@@ -2476,35 +2516,50 @@ export class ChunkEditor {
    */
   _guardCaretOnBackspace(prevRange) {
     const ed = this.editor;
-    const sel = window.getSelection();
-    const before = sel ? sel.getRangeAt(0).cloneRange() : null;
-    if (!before) return;
 
     // 退格前光标是否已在编辑区开头？是的话不需要修正
-    const atStart = before.startContainer === ed && before.startOffset === 0;
+    const atStart = prevRange.startContainer === ed && prevRange.startOffset === 0;
     if (atStart) return;
 
-    // 记录退格前的光标锚点，事件处理完后比对
-    const ed2 = ed;
+    // ★ 记录"光标左边紧邻的词块"作为还原目标 ★
+    //
+    // 不能只记 prevRange —— 浏览器原生退格删掉词块后，
+    // 那些节点已经不在 DOM 里了，用它换算不出位置。
+    // 用户感知的"光标跳到第一个词块后面"就是这种情况：
+    //   [词块A][词块B]  光标在末尾 → 退格删 B → 光标跑到开头（A 前面）。
+    const prevChunk = chunkBeforeCaret(ed, prevRange);
+
     setTimeout(() => {
-      if (!ed2.isConnected) return;
+      if (!ed.isConnected) return;
       const s2 = window.getSelection();
       if (!s2 || !s2.rangeCount) return;
       const now = s2.getRangeAt(0);
-      if (!ed2.contains(now.startContainer)) return;      // 焦点已不在编辑器，别乱动
-      const nowAtStart = now.startContainer === ed2 && now.startOffset === 0;
-      if (!nowAtStart) return;                             // 光标正常，无需修正
+      if (!ed.contains(now.startContainer)) return;      // 焦点已不在编辑器，别乱动
+      // 光标正常（不在开头）→ 无需修正
+      if (!(now.startContainer === ed && now.startOffset === 0)) return;
+      // 编辑区本来就是空的 → 开头也合理
+      if (!ed.textContent.trim() && !ed.querySelector(".ecp-chunk")) return;
 
-      // 光标被重置到开头 → 还原到退格前的位置（若该节点还在）
-      if (ed2.contains(before.startContainer)
-          && before.startContainer.nodeType === Node.TEXT_NODE
-          && before.startContainer.textContent.length >= before.startOffset) {
-        const rr = document.createRange();
-        rr.setStart(before.startContainer, Math.max(0, before.startOffset - 1));
-        rr.collapse(true);
-        s2.removeAllRanges();
-        s2.addRange(rr);
+      const rr = document.createRange();
+
+      if (prevChunk && prevChunk.isConnected) {
+        // ★ 被删掉的词块还在 → 光标应回到它原来的位置（它前面）
+        const a = caretAnchorBefore(prevChunk);
+        if (a) {
+          rr.setStart(a.node, a.offset);
+          rr.collapse(true);
+          s2.removeAllRanges();
+          s2.addRange(rr);
+          return;
+        }
       }
+
+      // 兜底：把光标放到编辑区**末尾**（而不是开头）
+      // 用户在末尾退格，光标理应留在末尾附近。
+      rr.selectNodeContents(ed);
+      rr.collapse(false);
+      s2.removeAllRanges();
+      s2.addRange(rr);
     }, 0);
   }
 
