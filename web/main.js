@@ -1075,6 +1075,12 @@ class Autocomplete {
   onKeyDown(e) {
     if (!this.el) return;
 
+    // ★ 事件发生在「内联编辑框」里 → 交给那个 input 自己处理 ★
+    // 本监听器在捕获阶段，会先于 input 的 Enter/Escape 处理拿到事件；
+    // 若不排除，在输入框里按 Enter 会被这里 preventDefault + choose()，
+    // 导致编辑无法确认（表现为"改了但没保存/编辑框行为异常"）。
+    if (e.target instanceof Element && e.target.closest?.("input, textarea")) return;
+
     // ★ 输入法组合期间一律放行 ★
     //
     // 本监听器挂在**捕获阶段**（为了抢在 _blockCanvasShortcuts 之前处理
@@ -2441,6 +2447,11 @@ export class ChunkEditor {
   }
 
   _blockCanvasShortcuts(e) {
+    // 内联输入框内的按键不拦 —— 那里都是正常文本编辑
+    // （光标移动、退格删字符），且阻断传播会让 input 自己的
+    // Enter/Escape 监听器收不到事件。
+    if (e.target instanceof Element && e.target.closest?.("input, textarea")) return;
+
     const k = e.key;
     const mod = e.ctrlKey || e.metaKey;
 
@@ -2458,6 +2469,18 @@ export class ChunkEditor {
   }
 
   onKeyDown(e) {
+    // ★ 事件发生在「内联编辑框」里 → 立即放行，什么都不做 ★
+    //
+    // 双击词块改英文/中文时，inlineEdit 会把词块**替换**成一个 <input>。
+    // 本监听器挂在 editor 的**捕获阶段**，会先于 input 自己的监听器执行，
+    // 所以这里必须**尽早 return**，且**不能 stopPropagation** ——
+    // 否则 input 上的 Enter（确认）/ Escape（取消）监听器收不到事件，
+    // 表现为"改完按 Enter 没反应、编辑框关不掉"。
+    //
+    // 之前还出现过另一类症状：退格被这里的词块逻辑接管
+    // （chunkBeforeCaret 找到 input 左边的前一个词块 → 删掉它 → 编辑被退出）。
+    if (e.target instanceof Element && e.target.closest?.("input, textarea")) return;
+
     // 编辑器内的按键一律不冒泡到 LiteGraph 画布，
     // 否则 Ctrl+C / Delete / Ctrl+A 等会被画布当成"操作节点"。
     e.stopPropagation();
