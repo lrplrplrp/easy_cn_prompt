@@ -222,6 +222,39 @@ class Lexicon:
 
     # ---------- 查询 ----------
 
+    def search_zh_strict(self, q: str, limit: int = 5) -> list[dict]:
+        """中文**严格**检索：只返回「完全相等」或「以 q 开头」的结果。
+
+        用于翻译时判定"词库是否真的收录了这个词"。
+        纯包含（"头发" 命中 "波浪头发"）不算 —— 那是别人的中文名
+        恰好含这几个字，采纳它会把用户想查的词换成另一个标签
+        （实测：头发→wavy hair、下巴→hand_on_own_chin）。
+
+        查不到时应交给模型翻译，而不是硬凑近似标签。
+        """
+        q = (q or "").strip()
+        if not q:
+            return []
+        out = [
+            x for x in self._search_custom(q, limit)
+            if (x.get("cn") or "").strip() == q or (x.get("cn") or "").startswith(q)
+        ]
+        if not self.available:
+            return out[:limit]
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT name, category, cn_name, post_count FROM tags "
+                    " WHERE cn_name LIKE ? AND category != 13 "
+                    " ORDER BY (cn_name = ?) DESC, LENGTH(cn_name) ASC, post_count DESC "
+                    " LIMIT ?",
+                    (f"{q}%", q, limit),
+                ).fetchall()
+            out += [self._row_to_item(r) for r in rows]
+        except Exception:  # noqa: BLE001
+            pass
+        return out[:limit]
+
     def _row_to_item(self, row: sqlite3.Row, source: str = "builtin") -> dict:
         en = row["name"]
         cn = row["cn_name"] or en
@@ -347,13 +380,27 @@ class Lexicon:
                 if _has_cjk(q):
                     # 中文：子串匹配（FTS5 unicode61 不分中文词，直接 LIKE 足矣，
                     # 33 万行实测约 80~150ms，命中缓存后无感）
-                    # category=5（元数据：bad_id / highres / c: 等）对生图无意义，直接过滤
+                    # category=13（形式：水印/签名等）对生图无意义，直接过滤
+                    #
+                    # ★ 排序必须**先看匹配质量，再看热度** ★
+                    # 只按 post_count 排会出现"包含即算命中"的串味：
+                    #   查「头发」→ 命中「波浪头发」(wavy hair)
+                    #   查「下巴」→ 命中「手托下巴」(hand_on_own_chin)
+                    # 都是"别人的中文名里恰好含这两个字"，与用户想查的词无关。
+                    # 三级优先级：完全相等 > 前缀 > 包含；同级再按热度。
                     sql = (
-                        "SELECT name, category, cn_name, post_count FROM tags "
-                        "WHERE cn_name LIKE ? AND category != 13 "
-                        "ORDER BY post_count DESC LIMIT ?"
+                        "SELECT name, category, cn_name, post_count,"
+                        "       CASE WHEN cn_name = ? THEN 0"
+                        "            WHEN cn_name LIKE ? THEN 1"
+                        "            ELSE 2 END AS mrank"
+                        "  FROM tags "
+                        " WHERE cn_name LIKE ? AND category != 13 "
+                        " ORDER BY mrank ASC, LENGTH(cn_name) ASC, post_count DESC"
+                        " LIMIT ?"
                     )
-                    rows = conn.execute(sql, (f"%{q}%", limit)).fetchall()
+                    rows = conn.execute(
+                        sql, (q, f"{q}%", f"%{q}%", limit)
+                    ).fetchall()
                 else:
                     # 英文：前缀优先，其次包含
                     sql = (

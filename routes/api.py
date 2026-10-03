@@ -25,7 +25,7 @@ async def status(request: web.Request) -> web.Response:
         "custom_count": custom_dict.count(),
         "categories": {str(k): v for k, v in CATEGORY_META.items()},
         "translate_backends": [],  # 二期填充，前端据此动态渲染
-        "version": "0.22.0-demo",
+        "version": "0.22.1-demo",
     })
 
 
@@ -277,15 +277,24 @@ async def translate(request: web.Request) -> web.Response:
         # 词库里有官方中英对照（如 "双马尾" ↔ twintails），
         # 比模型翻译准得多，也快得多。命中就不必再跑模型。
         #
-        # ⚠️ 匹配方式按方向区分（需求方明确）：
-        #   中文→英文：**允许模糊**（search）—— 中文输入常是整句/口语，
-        #             模糊搜索能帮忙找到对应标签
-        #   英文→中文：**必须完全匹配** —— 英文若用子串匹配，
-        #             "hair" 会命中 "long_hair"，直接曲解词义
+        # ⚠️ 匹配方式按方向区分：
+        #   中文→英文：**精确优先，前缀次之，纯包含不采纳**
+        #   英文→中文：**必须完全匹配**
+        #
+        # 中文侧不能无脑用模糊搜索取第一条 —— 那会把"别人的中文名里
+        # 恰好含这两个字"的标签当成命中：
+        #   头发 → wavy hair（波浪头发）     ← 实测串味
+        #   下巴 → hand_on_own_chin（手托下巴）← 实测串味
+        # 这类词词库里本来就没有精确条目，正确做法是**交给模型翻译**。
         if to_english:
-            hits = lex.lookup_cn(text) or lex.search(text, limit=1)
+            # ★ 翻译只认**完全相等** ★
+            # 前缀/包含匹配是给"补全候选"用的，翻译不能采纳 ——
+            # 否则"头发"会被换成"头发散开(hair_spread_out)"、
+            # "下巴"换成"下巴带(chinstrap)"，全是别的标签。
+            # 词库里没有就交给模型翻译，那才是它该干的活。
+            hits = lex.lookup_cn(text)
         else:
-            one = lex.lookup_en(text)          # ★ 完全匹配，不再 search 兜底
+            one = lex.lookup_en(text)          # ★ 完全匹配
             hits = [one] if one else []
 
         # ★ 中英混合时，先单独拿英文部分查一次词库 ★
