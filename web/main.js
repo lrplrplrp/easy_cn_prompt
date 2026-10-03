@@ -207,6 +207,25 @@ body.ecp-dragging-active .ecp-editor { cursor:grabbing; }
 }
 .ecp-sec-foot { display:flex; gap:8px; padding:8px 0 4px; }
 
+/* ---- 设置页：节点设置 ---- */
+.ecp-nodeset { padding:2px 0; }
+.ecp-nodeset-row {
+  display:flex; align-items:center; gap:12px;
+  padding:8px 4px; border-bottom:1px solid #333a47;
+}
+.ecp-nodeset-row:last-child { border-bottom:none; }
+.ecp-nodeset-label { flex:1 1 auto; min-width:0; }
+.ecp-nodeset-title { font-size:13px; color:#d3dae6; }
+.ecp-nodeset-desc { font-size:11.5px; color:#7b8496; margin-top:2px; }
+.ecp-nodeset-select {
+  flex:0 0 auto; max-width:52%;
+  background:#2b313b; color:#dfe6f0; border:1px solid #3a4150;
+  border-radius:4px; padding:4px 8px; font-size:12px; font-family:inherit;
+  cursor:pointer;
+}
+.ecp-nodeset-select:hover { border-color:#5b78a8; }
+.ecp-nodeset-select:focus { outline:none; border-color:#5b8dd6; }
+
 /* ---- 批量禁用弹窗 ---- */
 .ecp-batch-modal { width:min(560px, 92vw); }
 .ecp-batch-list { overflow-y:auto; padding:6px 14px 10px; }
@@ -1729,14 +1748,18 @@ export class ChunkEditor {
     }
     this.widget = w;
 
-    if (!w.__ecpOrig) {
-      w.__ecpOrig = { computeSize: w.computeSize, type: w.type, draw: w.draw, y: w.y, last_y: w.last_y };
+    hideWidget(w);
+
+    // ★ 把 4 个「设置型」控件也隐藏 —— 它们的界面搬到了「设置」页 ★
+    //
+    // ⚠️ 只隐藏、**不删除**：widget 仍然存在，值照常跟着工作流保存，
+    //    旧工作流的 widgets_values 结构不变（删掉会让数组错位，
+    //    导致所有参数串位、输出异常）。
+    //    设置页里的控件直接读写这些隐藏 widget 的 value。
+    for (const name of ECP_SETTING_WIDGETS) {
+      const sw = node.widgets?.find((x) => x.name === name);
+      if (sw) hideWidget(sw);
     }
-    // 隐藏：尺寸归零，跳过原生绘制
-    w.computeSize = () => [0, -4];
-    w.draw = () => {};
-    w.type = "hidden";
-    w.hidden = true;
 
     // 把我们的编辑器作为 DOM widget 挂上去。
     //
@@ -3141,6 +3164,14 @@ async function openDictManager(editorComp) {
     <div class="ecp-settings-body">
 
       <section class="ecp-sec">
+        <h4 class="ecp-sec-title">节点设置</h4>
+        <div class="ecp-modal-tip">
+          这些原本在节点上，现在收进这里。<b>每个节点独立保存</b>，改动立即生效。
+        </div>
+        <div class="ecp-nodeset"></div>
+      </section>
+
+      <section class="ecp-sec">
         <h4 class="ecp-sec-title">词库</h4>
         <div class="ecp-modal-tip">拖动排序，越靠上优先级越高。★ 默认为「一键收录」的目标。</div>
         <div class="ecp-dict-list"></div>
@@ -3180,6 +3211,9 @@ async function openDictManager(editorComp) {
 
   box.querySelector(".ecp-modal-close").addEventListener("click", closeDictManager);
   wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) closeDictManager(); });
+
+  // 节点设置控件（读写隐藏 widget 的 value）
+  renderNodeSettings(box.querySelector(".ecp-nodeset"), editorComp);
 
   const listEl = box.querySelector(".ecp-dict-list");
   const fileEl = box.querySelector(".ecp-import-file");
@@ -4311,6 +4345,115 @@ function inlineEdit(editorComp, chunk, field) {
   chunk.replaceWith(input);
   input.focus();
   input.select();
+}
+
+/** 搬到「设置」页的节点控件（隐藏界面但保留值，见 attachWidget） */
+const ECP_SETTING_WIDGETS = ["base_model", "trans_model", "auto_comma", "mode"];
+
+/**
+ * 隐藏一个 LiteGraph 控件，但**保留它的值**。
+ *
+ * 做法来自 prompt_text 的既有处理：尺寸归零 + 跳过绘制 + 标记 hidden。
+ * 控件仍在 node.widgets 里，序列化时照常写入 widgets_values，
+ * 因此旧工作流不会因为"控件消失"而数组错位。
+ *
+ * 可重复调用（多次隐藏同一控件是安全的）。
+ */
+
+/* ------------------------------------------------------------------ */
+/* 设置页：节点设置                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 在设置页渲染原本挂在节点上的 4 个控件。
+ *
+ * 这些控件的 **widget 仍然存在**（只是被 hideWidget 隐藏了），
+ * 所以这里直接读写它们的 value —— 好处是：
+ *   · 值照常随工作流序列化，旧工作流不受影响
+ *   · 节点执行时读到的就是我们写入的值，改动立即生效
+ *
+ * 每个节点的设置相互独立（设置页打开时绑定到当前节点）。
+ */
+function renderNodeSettings(host, editorComp) {
+  host.innerHTML = "";
+  const node = editorComp.node;
+
+  // 每个条目的定义：widget 名 / 标题 / 说明
+  // 选项列表从控件自身取（避免前后端两处维护）
+  const ITEMS = [
+    ["base_model", "出图模型规则",
+      "决定标签的输出格式（下划线 / 空格 / 画师 @ 前缀等）。"],
+    ["trans_model", "翻译模型",
+      "用于「翻译未收录」的本地 Hy-MT2 模型。"],
+    ["auto_comma", "中文逗号自动转英文",
+      "开启后，新键入的中文逗号「，」会自动变成「,」并触发词块。"],
+    ["mode", "连线文本处理方式",
+      "决定 text_in 连线进来的文本：替换手写词块，还是追加在后面。"],
+  ];
+
+  for (const [name, title, desc] of ITEMS) {
+    const w = node.widgets?.find((x) => x.name === name);
+    if (!w) continue;
+
+    const row = document.createElement("div");
+    row.className = "ecp-nodeset-row";
+
+    const label = document.createElement("div");
+    label.className = "ecp-nodeset-label";
+    const t = document.createElement("div");
+    t.className = "ecp-nodeset-title";
+    t.textContent = title;
+    const d = document.createElement("div");
+    d.className = "ecp-nodeset-desc";
+    d.textContent = desc;
+    label.append(t, d);
+
+    const sel = document.createElement("select");
+    sel.className = "ecp-nodeset-select";
+
+    // 选项：从控件定义取（BASE_MODELS / ["开启","关闭"] / 模型文件名…）
+    let opts = [];
+    if (Array.isArray(w.options?.values)) opts = w.options.values;
+    else if (Array.isArray(w.values)) opts = w.values;
+    if (!opts.length) opts = [w.value].filter((v) => v !== undefined);
+
+    for (const o of opts) {
+      const op = document.createElement("option");
+      op.value = String(o);
+      op.textContent = String(o);
+      sel.appendChild(op);
+    }
+    sel.value = String(w.value ?? "");
+
+    sel.addEventListener("change", () => {
+      const v = sel.value;
+      w.value = v;
+      // 走控件自己的 callback，保证节点侧的任何联动逻辑也执行
+      try { w.callback?.(v); } catch (e) { LOG("widget callback error", e); }
+      // 基础模型只影响**输出格式**（下划线/空格/@ 前缀），
+      // 词块的显示与分类不受影响，无需重绘 —— 执行时按新规则走。
+      app.graph.setDirtyCanvas(true, true);
+      toast(`已设置：${title} = ${v}`);
+    });
+
+    row.append(label, sel);
+    host.appendChild(row);
+  }
+}
+
+function hideWidget(w) {
+  if (!w || w.__ecpHidden) return;
+  if (!w.__ecpOrig) {
+    w.__ecpOrig = {
+      computeSize: w.computeSize, type: w.type, draw: w.draw,
+      y: w.y, last_y: w.last_y,
+    };
+  }
+  w.computeSize = () => [0, -4];
+  w.draw = () => {};
+  w.type = "hidden";
+  w.hidden = true;
+  w.__ecpHidden = true;
 }
 
 /** 保存到自定义词库（一期：写本地库文件） */
