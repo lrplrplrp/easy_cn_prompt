@@ -25,7 +25,7 @@ async def status(request: web.Request) -> web.Response:
         "custom_count": custom_dict.count(),
         "categories": {str(k): v for k, v in CATEGORY_META.items()},
         "translate_backends": [],  # 二期填充，前端据此动态渲染
-        "version": "0.22.1-demo",
+        "version": "0.22.2-demo",
     })
 
 
@@ -233,6 +233,11 @@ async def translate(request: web.Request) -> web.Response:
     items = body.get("items") or []
     if not isinstance(items, list) or not items:
         return web.json_response({"ok": False, "error": "items 不能为空"}, status=400)
+    # 显式指定方向的项（True = 强制中译英）
+    # 用于"用户改了中文、要求据此重译英文"的场景：此时必须是中译英，
+    # 不能按内容自动判定 —— 改的中文里可能含字母（如「A罩杯」），
+    # 会被 is_mixed() 判成"中英混合 → 英译中"，方向就反了。
+    force_en = body.get("force_en") or []
 
     model_name = body.get("model", "")
     tr = tb.LlamaGgufTranslator(model_name)
@@ -247,7 +252,7 @@ async def translate(request: web.Request) -> web.Response:
     results: list[dict] = []
     errors: list[str] = []
 
-    for raw in items[:200]:
+    for idx, raw in enumerate(items[:200]):
         text = str(raw).strip()
         if not text:
             continue
@@ -257,9 +262,12 @@ async def translate(request: web.Request) -> web.Response:
         # 那是给人看的，不该送去翻译 —— 否则模型会把 "(1.2)" 也译了。
         text = tb.strip_weight(text) or text
 
-        # 中英混合 → 译成中文（取英文部分）；
-        # 纯中文 → 译成英文；纯英文 → 译成中文
-        to_english = tb.detect_direction(text)
+        # 显式指定了方向就用它；否则按内容判定：
+        #   中英混合 → 译成中文（取英文部分）
+        #   纯中文   → 译成英文
+        #   纯英文   → 译成中文
+        forced = bool(force_en[idx]) if idx < len(force_en) else False
+        to_english = True if forced else tb.detect_direction(text)
         direction = "zh2en" if to_english else "en2zh"
 
         # ★ 中英混合时，先抽出英文部分作为翻译输入 ★

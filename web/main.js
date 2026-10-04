@@ -547,7 +547,7 @@ function paintChunk(span) {
   if (del) span.appendChild(del);
 }
 
-function makeChunkEl({ en, cn, category, disabled, source, unlisted, weight, typed }) {
+function makeChunkEl({ en, cn, category, disabled, source, unlisted, weight, typed, cnEdit }) {
   const span = document.createElement("span");
   span.className = "ecp-chunk";
   span.contentEditable = "false";
@@ -557,6 +557,7 @@ function makeChunkEl({ en, cn, category, disabled, source, unlisted, weight, typ
   span.dataset.source = source || "builtin";
   if (unlisted) span.dataset.unlisted = "1";
   if (typed) span.dataset.typed = "1";
+  if (cnEdit) span.dataset.cnEdit = "1";
   if (disabled) span.dataset.disabled = "1";
   if (weight != null && Math.abs(Number(weight) - 1) > 1e-9) {
     span.dataset.weight = fmtWeight(weight);
@@ -596,6 +597,8 @@ function serializeChunk(span) {
     parts.push(`src=${span.dataset.source}`);
   }
   if (span.dataset.weight) parts.push(`w=${span.dataset.weight}`);
+  // 中文被手动改过 → 下次翻译应据此重译英文（方向为中译英）
+  if (span.dataset.cnEdit === "1") parts.push("cnEdit");
   if (span.dataset.unlisted === "1") {
     parts.push("unlisted");
     // 注：早期的 typed 标记已废弃 —— 现在填充色永远按类型，
@@ -648,18 +651,19 @@ function deserializeInto(editor, text) {
     const raw = m[1];
     const fields = raw.split("|");
     const en = (fields.shift() || "").replace(/\\\|/g, "|").trim();
-    let cn = "", disabled = false, source = "builtin", unlisted = false, category = 0, weight = null, typed = false;
+    let cn = "", disabled = false, source = "builtin", unlisted = false, category = 0, weight = null, typed = false, cnEdit = false;
     for (const f of fields) {
       if (f === "disabled") disabled = true;
       else if (f === "unlisted") unlisted = true;
       else if (f === "typed") typed = true;
+      else if (f === "cnEdit") cnEdit = true;
       else if (f.startsWith("cn=")) cn = f.slice(3).replace(/\\\|/g, "|");
       else if (f.startsWith("cat=")) category = Number(f.slice(4)) || 0;
       else if (f.startsWith("w=")) weight = Number(f.slice(2)) || null;
       else if (f === "src=custom") source = "custom";
       else if (f.startsWith("src=")) source = f.slice(4);
     }
-    if (en) frag.appendChild(makeChunkEl({ en, cn, category, disabled, source, unlisted, weight, typed }));
+    if (en) frag.appendChild(makeChunkEl({ en, cn, category, disabled, source, unlisted, weight, typed, cnEdit }));
     pos = m.index + m[0].length;
     // 标记后紧跟的英文逗号并入词块，不再单独渲染
     if (text[pos] === ",") pos += 1;
@@ -1615,29 +1619,48 @@ export class ChunkEditor {
     //   ③ 从未翻译过（无 transCn）
     //      → 优先送英文（英译中补中文名）；没有英文才送中文。
     const skipIdx = new Set();
+    // ★ 哪些项是"用户改了中文、要求据此重译英文" ★
+    //
+    // 这类项必须**强制中译英**，不能让后端按内容自动判定方向 ——
+    // 用户改的中文里可能含字母（如「A罩杯」「头发 hair」），
+    // 会被 is_mixed() 判成"中英混合 → 英译中"，方向就反了。
+    // 这是"偶发"的原因：只有改的中文恰好含拉丁字母时才触发。
+    const forceZh2En = new Set();
     const items = list.map((c, i) => {
       const en = (c.dataset.en || "").trim();
       const cn = (c.dataset.cn || "").trim();
       const transCn = (c.dataset.transCn || "").trim();
+      const cnEdit = c.dataset.cnEdit === "1";   // 持久标记：中文被手动改过
+
+      // ① 中文被手动改过（持久标记，不怕词块重建）→ 强制中译英
+      //    用 cn 而不是 en，后端按内容判定就是 zh2en；
+      //    同时给后端一个显式信号，避免内容含字母时被误判。
+      if (cnEdit && cn) {
+        forceZh2En.add(i);
+        return cn;
+      }
 
       if (transCn) {
-        // 已翻译过
+        // 已翻译过（同一会话内）
         if (cn && cn === transCn) {
-          skipIdx.add(i);          // ① 中文没改 → 跳过
+          skipIdx.add(i);          // 中文没改 → 跳过
           return "";
         }
         if (cn && cn !== transCn) {
-          return cn;               // ② 中文被改 → 按新中文重译英文
+          forceZh2En.add(i);       // 中文被改 → 强制中译英
+          return cn;
         }
       }
-      return en || cn;             // ③ 首次 → 优先英文
+      return en || cn;             // 首次 → 优先英文（方向交给后端判定）
     });
     this._skipTranslate = skipIdx;
 
     // 翻译可能耗时较久，给个进行中的提示
     // 跳过的项不发送（保持原有 en/cn 不变）
-    const sendList = list.filter((_, i) => !skipIdx.has(i));
-    const sendItems = items.filter((_, i) => !skipIdx.has(i));
+    const keepIdx = list.map((_, i) => i).filter((i) => !skipIdx.has(i));
+    const sendList = keepIdx.map((i) => list[i]);
+    const sendItems = keepIdx.map((i) => items[i]);
+    const forceFlags = keepIdx.map((i) => forceZh2En.has(i));
     if (!sendItems.length) {
       toast(`这 ${list.length} 个词块都已翻译过（改中文后可重译英文）`);
       return 0;
@@ -1656,8 +1679,9 @@ export class ChunkEditor {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: ctrl.signal,
-        // 方向由后端按内容自动判定，这里不传 to_english
-        body: JSON.stringify({ items: sendItems, model }),
+        // force_en 里的项强制中译英（用户改了中文后重译的场景）；
+        // 其余项由后端按内容自动判定方向。
+        body: JSON.stringify({ items: sendItems, model, force_en: forceFlags }),
       });
       clearTimeout(timer);
       data = await r.json();
@@ -4313,6 +4337,14 @@ function inlineEdit(editorComp, chunk, field) {
         if (v) chunk.dataset.en = v;
       } else {
         chunk.dataset.cn = v;
+        // ★ 打「中文被手动改过」的**持久标记** ★
+        //
+        // 之前用的是运行时字段 transCn，它**不随工作流序列化** ——
+        // 词块一旦被重建（编辑、刷新、重载、复制粘贴）就丢了，
+        // 于是再点翻译会走"首次翻译"分支、优先送英文 → 变成英译中。
+        // 这就是"改了中文后方向偶发反了"的根因。
+        // 改用写进 <chunk> 的标记，任何往返都不会丢。
+        chunk.dataset.cnEdit = "1";
       }
       paintChunk(chunk);
     }

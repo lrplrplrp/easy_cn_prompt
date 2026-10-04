@@ -11,7 +11,7 @@ from .routes.api import ROUTES
 WEB_DIRECTORY = "./web"
 
 # 版本号与后端 API 保持一致（启动日志会打印，便于确认装的是哪一版）
-__version__ = "0.22.1"
+__version__ = "0.22.2"
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 
