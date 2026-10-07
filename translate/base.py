@@ -85,8 +85,10 @@ def resolve_model(name: str) -> str | None:
 # 注：模板里的换行从 "\n\n" 改成 "\n"。
 # 原写法与 worker 的 stop=["\n\n"] 撞车（虽然 llama.cpp 会区分
 # prompt 与生成部分，但没有必要冒这个险），单个换行足够分隔。
-ZH_TMPL = "将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n{text}"
-EN_TMPL = "将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n{text}"
+# 两个方向共用同一个（中文）模板，只替换 target。
+# 早期 en2zh 用的是英文模板，实测在 CUDA 后端会输出说明/道歉类长串，
+# 且目标语言写英文单词 "Chinese" 不符合模型训练时的中文表述习惯。
+TMPL = "将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n{text}"
 
 # Hy-MT2 要求使用**语言全名**，不能写 en/zh
 LANG_ZH = "中文"
@@ -142,7 +144,7 @@ def detect_direction(text: str) -> bool:
 def build_prompt(text: str, to_english: bool) -> str:
     """拼提示词。target 必须用**中文语言全名**（模型要求，不能写 en/zh）。"""
     target = LANG_EN if to_english else LANG_ZH
-    return ZH_TMPL.format(target=target, text=text)
+    return TMPL.format(target=target, text=text)
 
 
 _WS_RE = re.compile(r"\s+")
