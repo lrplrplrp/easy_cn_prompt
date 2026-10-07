@@ -1742,11 +1742,29 @@ export class ChunkEditor {
     this.updateBarInfo();
 
     if (data.fail_count) {
-      // 失败原因可能是模型跑偏（返回说明/道歉而非译文）。
-      // 后端会重试一次，仍失败才报错 —— 此时**不会**把错误内容写进词块，
+      // 失败原因可能是模型跑偏（返回说明/道歉而非译文），
+      // 也可能是模型加载失败、显存不足等 —— 后端会重试一次，
+      // 仍失败才报错。此时**不会**把错误内容写进词块，
       // 所以这里要明确告诉用户「原文没被动过」，避免以为翻译生效了。
+      //
+      // ★ 同时把**具体原因**显示出来 ★
+      // 只报"失败 N 个"用户无从下手：是模型没下载？显存不够？还是模型跑偏？
+      // 后端已经在 errors 里给了详情，直接展示第一条。
+      const why = String((data.errors || [])[0] || "");
+      // 按常见原因给出**可操作的**提示，而不是把原始异常抛给用户
+      let detail = why.slice(0, 80);
+      if (/超时|timeout/i.test(why)) {
+        detail = "翻译超时。显存不足时首次加载较慢，请稍后重试或改用更小的模型";
+      } else if (/memory|显存|CUDA|Vulkan|device/i.test(why)) {
+        detail = "显卡内存不足。可关闭其他占用显存的程序后重试，或让翻译走 CPU";
+      } else if (/找不到模型|not found/i.test(why)) {
+        detail = "找不到翻译模型，请确认模型文件在 ComfyUI/models/easy_cn_prompt/";
+      } else if (/跑偏|未按要求输出/.test(why)) {
+        detail = "模型未按格式输出译文（已自动重试一次）";
+      }
       const hint = done === 0 ? "（词块内容未改动）" : "";
-      toast(`翻译完成 ${done} 个，失败 ${data.fail_count} 个${hint}`, true);
+      toast(`翻译完成 ${done} 个，失败 ${data.fail_count} 个：${detail}${hint}`, true);
+      if (why) LOG("翻译失败详情", data.errors);
     } else if (lexiconHits) {
       toast(`已翻译 ${done} 个，其中 ${lexiconHits} 个匹配到词库`);
     }

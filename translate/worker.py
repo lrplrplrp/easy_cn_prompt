@@ -325,4 +325,11 @@ def run_translate(model_path: str, prompt: str, max_tokens: int = 128) -> str:
             _LOADED_MODEL = model_path
             return res.get("text", "")
 
-    raise RuntimeError(last_err or "翻译失败（未知原因）")
+    # 附上排查方向：用户看到"翻译失败"时最需要的是"接下来怎么办"。
+    # 本地推理失败通常只有三类原因，逐条列出来比一句"未知错误"有用得多。
+    hint = (
+        "（排查：① 确认 gguf 放在 ComfyUI/models/easy_cn_prompt/；"
+        "② 显存不足会拖慢/失败，可先关闭其他占显存的程序；"
+        "③ 反复失败可重启 ComfyUI 清掉卡住的翻译进程）"
+    )
+    raise RuntimeError((last_err or "翻译失败（未知原因）") + hint)

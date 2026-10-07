@@ -254,12 +254,20 @@ class LlamaGgufTranslator(Translator):
         # 检测到就重试一次；仍失败则抛错，让上层按"翻译失败"处理 ——
         # 宁可没有译文，也不要把错误内容写进词块。
         if looks_like_failed_translation(raw, out, to_english):
-            _log(f"译文疑似跑偏，重试一次：{out[:60]!r}")
+            _log(f"译文疑似跑偏，重试一次。第一次输出：{out[:80]!r}")
             raw2 = worker.run_translate(self.model_path, prompt)
             out2 = clean_output(raw2)
             if looks_like_failed_translation(raw2, out2, to_english):
-                _log(f"重试仍跑偏，放弃：{out2[:60]!r}")
-                raise RuntimeError(f"翻译结果异常（模型未按要求输出）：{out2[:80]}")
+                _log(f"重试仍跑偏，放弃。第二次输出：{out2[:80]!r}")
+                # 错误信息要**说清原因和排查方向**，不能只丢一句"异常" ——
+                # 用户看到"失败"时最需要知道的是"接下来怎么办"。
+                raise RuntimeError(
+                    "模型未按要求输出译文（连续 2 次）。"
+                    f"它返回的是：{out2[:60]!r}。"
+                    "常见原因：① 显存不足导致推理异常（可关闭其他占显存的程序后重试）；"
+                    "② 模型文件损坏或不完整（重新下载 gguf）；"
+                    "③ 显卡后端不稳定（可让翻译改走 CPU）。"
+                )
             return out2
         return out
 
